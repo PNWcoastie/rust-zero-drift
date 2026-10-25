@@ -1,0 +1,40 @@
+[package]
+name = "rust-zero-drift"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Zero-Drift Systems Rust Architecture, Compiler Guardrails & Pure-Rust Force-Multiplier Reference Implementation (#![forbid(unsafe_code)], 0 external crates)"
+authors = ["PNWcoastie"]
+repository = "https://github.com/PNWcoastie/rust-zero-drift"
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_precision_loss = "deny"
+float_cmp = "deny"
+
+[profile.dev]
+debug = "line-tables-only"
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

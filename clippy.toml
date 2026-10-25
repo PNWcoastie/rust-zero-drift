@@ -1,0 +1,8 @@
+# clippy.toml — Zero-Drift Compiler Guardrails for Human & AI Agent Workflows
+disallowed-methods = [
+    { path = "std::env::var", reason = "Parse and validate typed configuration once at startup instead of scattered runtime environment lookups" },
+    { path = "std::thread::sleep", reason = "Use async timers or deterministic virtual clocks instead of blocking OS threads" },
+]
+disallowed-types = [
+    { path = "std::sync::Mutex", reason = "Prefer lock-free channels/atomics, single-owner Sans-IO state machines, or parking_lot::Mutex (no lock poisoning)" },
+]
