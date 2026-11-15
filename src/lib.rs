@@ -13,11 +13,16 @@
 //!    `Rc<RefCell<T>>` or `unsafe` pointers, while preventing ABA use-after-free bugs.
 //! 4. **Sans-IO Deterministic Engine Kernel ([`SafetyGovernor`]):** Pure `Event -> Action` state
 //!    transition logic decoupled from network, timer, or hardware I/O.
+//! 5. **Transactional RAII Rollback ([`RollbackGuard`]):** Powered by Rust `1.100.0`'s stabilized
+//!    [`core::mem::DropGuard`], ensuring multi-step mutations roll back automatically on early
+//!    `?` return or panic unless explicitly committed via `.dismiss()`.
 
 #![forbid(unsafe_code)]
 
 use core::fmt;
 use core::marker::PhantomData;
+use core::mem::DropGuard;
+use core::ops::{Deref, DerefMut};
 
 /// Exhaustive domain error contract for zero-drift state transitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,9 +450,62 @@ impl SafetyGovernor {
     }
 }
 
+// ============================================================================
+// Pattern 5: Transactional RAII Rollback Guard (Rust 1.100 `DropGuard`)
+// ============================================================================
+
+/// Zero-drift transactional RAII guard backed by Rust `1.100.0`'s stabilized
+/// [`core::mem::DropGuard`].
+///
+/// Mutated state automatically triggers `on_rollback` if execution exits early via
+/// `?`, `return`, or unwinding panic, unless explicitly committed via [`Self::dismiss`]
+/// or [`Self::commit`].
+#[derive(Debug)]
+#[must_use = "disarm with .dismiss()/.commit() or state will roll back on drop"]
+pub struct RollbackGuard<'a, T, F: FnOnce(&'a mut T)>(DropGuard<&'a mut T, F>);
+
+impl<'a, T, F: FnOnce(&'a mut T)> RollbackGuard<'a, T, F> {
+    /// Wraps mutable `state` with an `on_rollback` closure executed automatically if
+    /// the guard is dropped before [`Self::dismiss`] / [`Self::commit`] is called.
+    #[inline]
+    pub fn new(state: &'a mut T, on_rollback: F) -> Self {
+        Self(DropGuard::new(state, on_rollback))
+    }
+
+    /// Disarms the rollback closure and commits the mutated state, returning the inner
+    /// mutable reference.
+    #[inline]
+    pub fn dismiss(self) -> &'a mut T {
+        DropGuard::dismiss(self.0)
+    }
+
+    /// Alias for [`Self::dismiss`].
+    #[inline]
+    pub fn commit(self) -> &'a mut T {
+        Self::dismiss(self)
+    }
+}
+
+impl<'a, T, F: FnOnce(&'a mut T)> Deref for RollbackGuard<'a, T, F> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a, T, F: FnOnce(&'a mut T)> DerefMut for RollbackGuard<'a, T, F> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::convert::Infallible;
     use core::mem::size_of;
 
     #[test]
@@ -459,6 +517,17 @@ mod tests {
         assert_eq!(
             size_of::<Option<&Command<Verified>>>(),
             size_of::<&Command<Verified>>()
+        );
+
+        // Uninhabited error niche optimization (Rust 1.100 stabilized `!` + Infallible alias):
+        // Result<Command<Verified>, !> requires 0 discriminant tag bytes!
+        assert_eq!(
+            size_of::<Result<Command<Verified>, Infallible>>(),
+            size_of::<Command<Verified>>()
+        );
+        assert_eq!(
+            size_of::<Result<Command<Verified>, !>>(),
+            size_of::<Command<Verified>>()
         );
 
         // Typestate PhantomData markers must add 0 bytes across all lifecycle states
@@ -551,5 +620,44 @@ mod tests {
         // Stale key_a must NEVER resolve to Joint_B!
         assert_eq!(arena.get(key_a), None);
         assert_eq!(arena.get(key_b), Some(&"Joint_B"));
+    }
+
+    #[test]
+    fn transactional_rollback_guard_reverts_on_early_err_and_commits_on_dismiss() {
+        fn stage_commit(
+            gov: &mut SafetyGovernor,
+            seq: u64,
+            amount: i64,
+        ) -> Result<GovernorAction, ZeroDriftError> {
+            let snapshot = gov.clone();
+            let mut tx = RollbackGuard::new(gov, move |slot| {
+                *slot = snapshot;
+            });
+
+            // Mutate governor state before validation completes
+            tx.consecutive_faults = tx.consecutive_faults.saturating_add(1);
+
+            let cmd = Command::new(seq, amount);
+            let verified = cmd.verify(tx.max_abs_micros)?;
+            tx.consecutive_faults = 0;
+            tx.committed_count = tx.committed_count.saturating_add(1);
+
+            let _committed_ref = tx.dismiss();
+            Ok(GovernorAction::Dispatch(verified.commit()))
+        }
+
+        let mut gov = SafetyGovernor::new(50_000_000, 2);
+
+        // 1. Failing transaction returns Err via `?` -> RollbackGuard restores `consecutive_faults == 0`
+        let err = stage_commit(&mut gov, 1, 80_000_000);
+        assert!(matches!(err, Err(ZeroDriftError::LimitExceeded { .. })));
+        assert_eq!(gov.consecutive_faults, 0);
+        assert_eq!(gov.committed_count(), 0);
+
+        // 2. Successful transaction calls `.dismiss()` -> mutation commits permanently
+        let ok = stage_commit(&mut gov, 2, 25_000_000);
+        assert!(matches!(ok, Ok(GovernorAction::Dispatch(_))));
+        assert_eq!(gov.consecutive_faults, 0);
+        assert_eq!(gov.committed_count(), 1);
     }
 }

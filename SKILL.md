@@ -33,13 +33,16 @@ For the full memory-layout refresher, 20-domain crate ecosystem routing tables, 
    - **Cyclic Graphs / Simulations / UI Trees:** Never use `Rc<RefCell<Node>>` pointer webs. Use generational arenas (`slotmap::SlotMap<NodeKey, Node>`) or standalone Entity-Component-Systems (`bevy_ecs` / `hecs`) with Structure-of-Arrays (SoA) layout.
    - **Multi-Crate Sans-IO Workspaces:** Once a project exceeds ~2,000 LOC, split into `crates/domain-types` (zero I/O deps), `crates/core-engine` (pure deterministic `fn on_event(&mut self, ev: Event) -> Actions` with zero network/async calls), and `crates/io-adapters` (Tokio, WebSockets, DB, hardware buses).
 
-### Stage 2 — Compiler Guardrail Lock-In & Rust 2024 Implementation
+### Stage 2 — Compiler Guardrail Lock-In & Rust 2024 / 1.100+ Implementation
 1. **Enforce `#![forbid(unsafe_code)]` & Strict Anti-Drift Lints from Line 1:**
-   - Every root `Cargo.toml` must configure `[lints.rust] unsafe_code = "forbid"` and `[lints.clippy]` denying `.unwrap()`, `.expect()`, `todo!()`, `unimplemented!()`, `dbg!()`, exact float comparisons (`float_cmp`), and silent lossy integer casts (`cast_possible_truncation`, `cast_sign_loss`).
+   - Every root `Cargo.toml` must configure `[lints.rust] unsafe_code = "forbid"`, `[lints.cargo] unused_dependencies = "warn"` (native Cargo `1.100+` dependency hygiene without external `cargo-machete`/`udeps`), and `[lints.clippy]` denying `.unwrap()`, `.expect()`, `todo!()`, `unimplemented!()`, `dbg!()`, exact float comparisons (`float_cmp`), and silent lossy integer casts (`cast_possible_truncation`, `cast_sign_loss`).
+   - Enforce supply-chain cooldown policies via Cargo `min-publish-age` (e.g., in `.cargo/config.toml` or resolver settings) alongside `cargo-deny` so freshly hijacked crate versions cannot sneak into `Cargo.lock`.
    - Add a `clippy.toml` at the workspace root when banning project-specific anti-patterns (`std::env::var` in hot paths, `std::sync::Mutex` in favor of `parking_lot::Mutex`, etc.).
-2. **Enforce Modern Rust 2024 Idioms (Zero Legacy Training-Weight Drift):**
+2. **Enforce Modern Rust 2024 & `1.100+` Idioms (Zero Legacy Training-Weight Drift):**
    - Use standard library `std::sync::LazyLock` and `std::sync::OnceLock` (never `lazy_static!` or `once_cell`).
-   - Use native `async fn` in traits (only reach for `#[async_trait]` or `trait-variant` if dynamic `Box<dyn Trait>` object safety is explicitly required).
+   - Use native `async fn` in traits and native `async ||` closures (`AsyncFn` / `AsyncFnMut`) so async callbacks borrow cleanly across `.await` without cloning `Arc`s into `|| async move { ... }` (only reach for `#[async_trait]` or `trait-variant` if dynamic `Box<dyn Trait>` object safety is explicitly required).
+   - Use `core::mem::DropGuard` (`DropGuard::new` + `DropGuard::dismiss`) for transactional RAII state rollback on early `?` returns instead of error-prone rollback boolean flags or external `scopeguard` crates.
+   - Use the Never Type `!` / `core::convert::Infallible` (`Result<T, !>`) for infallible trait implementations to guarantee 0-byte tag overhead via uninhabited niche optimization, and use `core::alloc::Allocator` when parameterizing custom arena-backed `Vec<T, A>` / `Box<T, A>` allocations.
    - Use flat `let Some(val) = expr else { return Err(...); };` guards instead of deeply nested `match` pyramids.
    - Prefer generics, traits, `const fn`, and `#[derive]` over custom `macro_rules!` DSLs so `rust-analyzer` type inference remains instant.
 3. **Production Async, Error, Secret & Concurrency Discipline:**

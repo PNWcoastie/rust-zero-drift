@@ -2,7 +2,7 @@
 name = "rust-zero-drift"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.100"
 description = "Zero-Drift Systems Rust Architecture, Compiler Guardrails & Pure-Rust Force-Multiplier Reference Implementation (#![forbid(unsafe_code)], 0 external crates)"
 authors = ["PNWcoastie"]
 repository = "https://github.com/PNWcoastie/rust-zero-drift"
@@ -24,6 +24,9 @@ cast_possible_truncation = "deny"
 cast_sign_loss = "deny"
 cast_precision_loss = "deny"
 float_cmp = "deny"
+
+[lints.cargo]
+unused_dependencies = "warn"
 
 [profile.dev]
 debug = "line-tables-only"

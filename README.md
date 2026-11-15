@@ -10,8 +10,8 @@
 
 | Artifact | Purpose |
 | :--- | :--- |
-| **[`src/lib.rs`](src/lib.rs)** | Zero-dependency, `#![forbid(unsafe_code)]` Rust 2024 reference implementations of: **(1)** Validated `#[repr(transparent)]` fixed-point Newtypes (`BoundedScalar`), **(2)** Zero-Cost Typestate Workflows (`Command<Unchecked> -> Command<Verified> -> Command<Committed>`), **(3)** ABA-immune `GenerationalArena<T>` (`NodeKey`), and **(4)** Sans-IO Deterministic `SafetyGovernor`. |
-| **[`Cargo.toml`](Cargo.toml) & [`clippy.toml`](clippy.toml)** | Drop-in production compiler & linter configuration enforcing `unsafe_code = "forbid"`, pedantic Clippy rules, banned `.unwrap()`/`.expect()`/`todo!()`/lossy `as` casts, fast incremental dev builds (`debug = "line-tables-only"`), and `lto = "fat"` release tuning. |
+| **[`src/lib.rs`](src/lib.rs)** | Zero-dependency, `#![forbid(unsafe_code)]` Rust `1.100.0` (Edition 2024) reference implementations of: **(1)** Validated `#[repr(transparent)]` fixed-point Newtypes (`BoundedScalar`), **(2)** Zero-Cost Typestate Workflows (`Command<Unchecked> -> Command<Verified> -> Command<Committed>`), **(3)** ABA-immune `GenerationalArena<T>` (`NodeKey`), **(4)** Sans-IO Deterministic `SafetyGovernor`, and **(5)** Transactional RAII `RollbackGuard` powered by `core::mem::DropGuard`, plus uninhabited `!` / `Infallible` zero-byte `Result` niche proofs. |
+| **[`Cargo.toml`](Cargo.toml) & [`clippy.toml`](clippy.toml)** | Drop-in Rust `1.100+` (`rust-version = "1.100"`) compiler & linter configuration enforcing `unsafe_code = "forbid"`, `[lints.cargo] unused_dependencies = "warn"`, pedantic Clippy rules, banned `.unwrap()`/`.expect()`/`todo!()`/lossy `as` casts, fast incremental dev builds (`debug = "line-tables-only"`), and `lto = "fat"` release tuning. |
 | **[`SKILL.md`](SKILL.md)** | Ready-to-use **Google Antigravity 2.0 / Agent Skill** enforcing the 4-Stage Zero-Drift Rust Engineering Workflow and bridging hot-loop verification into **[REA-Argonaut](https://github.com/PNWcoastie/REA-Argonaut)**. |
 
 ---
@@ -45,11 +45,12 @@ By default (`repr(Rust)`), the compiler automatically **reorders struct fields**
 | **`#[repr(align(64))]`** | Forces the struct to sit on a 64-byte CPU cache-line boundary. | Preventing **false sharing** between threads mutating adjacent atomics/counters. |
 | **`#[repr(u8)]` / `#[repr(u32)]`** | Forces an `enum` discriminant tag to have an exact integer byte width. | Binary wire protocols and hardware registers. |
 
-#### Niche Optimization (Zero-Cost `Option`)
+#### Niche Optimization (Zero-Cost `Option` & Uninhabited `Result`)
 In most languages, making a pointer nullable or wrapping a value in `Optional<T>` adds extra bytes or a heap allocation. Rust detects **invalid bit patterns ("niches")** and hides the `None` tag inside them for free:
 - `size_of::<&T>()` == **8 bytes**
 - `size_of::<Option<&T>>()` == **8 bytes** (because a valid reference can never be `0x0`, Rust uses `0x0` to represent `None`!)
 - Same for `Option<Box<T>>`, `Option<NonZeroU64>`, and `Option<bool>`.
+- **Uninhabited Error Elimination (Rust `1.100+` Never Type `!` & `Infallible`):** `size_of::<Result<T, !>>()` == `size_of::<Result<T, Infallible>>()` == `size_of::<T>()` (verified in [`src/lib.rs`](src/lib.rs)) — zero tag bytes and zero error-branch checks.
 
 ---
 
@@ -392,15 +393,18 @@ Never use `Box<dyn std::error::Error>` or raw `String` errors. Enforce a strict 
   ```
 - **`rust-embed` / `include_bytes!`:** Bakes static folders (HTML/Wasm assets, shaders, lookup tables) directly into the `.rodata` section of your compiled Rust binary in release mode.
 
-### Pattern 6: Production Compiler & Linter Hardening
-See [`Cargo.toml`](Cargo.toml) and [`clippy.toml`](clippy.toml) in this repository for the full drop-in configuration.
+### Pattern 6: Production Compiler, Cargo Hygiene & Linter Hardening (Rust `1.100+`)
+See [`Cargo.toml`](Cargo.toml) and [`clippy.toml`](clippy.toml) in this repository for the full drop-in configuration (including `rust-version = "1.100"`, `unsafe_code = "forbid"`, and native `[lints.cargo] unused_dependencies = "warn"`). Pair this with Cargo's `min-publish-age` cooldown policy to prevent newly published compromised crate versions from entering `Cargo.lock`.
+
+### Pattern 7: Transactional RAII Rollback (`RollbackGuard` / `core::mem::DropGuard`)
+When a multi-step state mutation can fail mid-flight via `?`, [`RollbackGuard`](src/lib.rs) wraps Rust `1.100.0`'s `core::mem::DropGuard` so any early error return automatically restores prior state, while `.commit()` dismisses the guard on success — zero heap allocation and `#![forbid(unsafe_code)]`.
 
 ---
 
 ## Part IV: The Antigravity + Rust Agentic Playbook & [REA-Argonaut](https://github.com/PNWcoastie/REA-Argonaut) Bridge
 
 ### 1. Eliminating the 5 Classic AI-Agent Rust Blind Spots
-1. **Rust 2024 Idioms Over Legacy Crates:** Standard library `std::sync::LazyLock` / `OnceLock` over `lazy_static!`/`once_cell`; native `async fn` in traits over `#[async_trait]` heap boxing; flat `let ... else` guards over nested `match` pyramids.
+1. **Rust 2024 & `1.100+` Idioms Over Legacy Crates:** Standard library `std::sync::LazyLock` / `OnceLock` over `lazy_static!`/`once_cell`; native `async fn` in traits and `async ||` closures (`AsyncFn`/`AsyncFnMut`) over `#[async_trait]` boxing and `Arc`-cloning closures; `core::mem::DropGuard` over boolean rollback flags or `scopeguard`; `Result<T, !>` (`Infallible`) and `core::alloc::Allocator`; native `[lints.cargo] unused_dependencies = "warn"`; and flat `let ... else` guards over nested `match` pyramids.
 2. **Async Cancellation-Safety & Bounded Backpressure:** Bounded `tokio::sync::mpsc::channel(cap)` only (never `unbounded_channel()`); cancellation-safe `tokio::select!` branches; structured `CancellationToken` + `TaskTracker` shutdowns.
 3. **Secret Hygiene:** `secrecy::SecretString` + `zeroize` for all credentials and startup-validated `figment` + `clap` configs.
 4. **Fast Incremental Dev Builds:** `debug = "line-tables-only"` and `[profile.dev.package."*"] opt-level = 2`.
